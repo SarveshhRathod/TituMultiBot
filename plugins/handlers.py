@@ -7,14 +7,13 @@ from core.db import db
 from engine.extractor import EdTechExtractor
 from engine.downloader import BatchDownloader
 
-# Dynamic Start Menu Builder
+# Dynamic Start Menu Builder (Admin button only visible to Admins)
 async def get_start_menu(user_id: int) -> InlineKeyboardMarkup:
     sudos = await db.get_sudo_users()
     buttons = [
         [InlineKeyboardButton("📦 Extract Courses", callback_data="mode_extract")],
         [InlineKeyboardButton("📥 Download TXT File", callback_data="mode_download")]
     ]
-    # Admin Panel button is visible ONLY to Admins/Sudo Users
     if user_id in sudos:
         buttons.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="mode_admin")])
     return InlineKeyboardMarkup(buttons)
@@ -204,7 +203,8 @@ def register_handlers(app: Client):
                     email, pwd = auth_txt.split("*", 1)
                     token, user_id = await EdTechExtractor.appx_login(api_domain, email, pwd)
                 else:
-                    token, user_id = auth_txt, ""
+                    token = auth_txt
+                    user_id = ""
 
                 purchases = await EdTechExtractor.fetch_appx_courses(api_domain, token, user_id)
                 course_list_str = "**Your Available Courses:**\n\n"
