@@ -8,6 +8,9 @@ from pyrogram import Client
 from pyrogram.types import Message
 from config import COOKIES_FILE
 
+# Global task cancel flags dictionary
+CANCEL_FLAGS = {}
+
 class BatchDownloader:
 
     @staticmethod
@@ -23,11 +26,20 @@ class BatchDownloader:
 
     @staticmethod
     async def process_batch(client: Client, message: Message, links: list, quality: str, batch_name: str, credit: str, start_index: int = 1):
-        """Unified processing loop for downloading TXT link batches."""
+        """Unified processing loop for downloading TXT link batches with Cancel support."""
+        chat_id = message.chat.id
+        CANCEL_FLAGS[chat_id] = False
+        
         total = len(links)
-        status_msg = await message.reply_text(f"🚀 **Starting Engine...**\nTotal Links Found: `{total}`")
+        status_msg = await message.reply_text(f"🚀 **Starting Engine...**\nTotal Links Found: `{total}`\n\n💡 Send `/cancel` anytime to stop!")
 
         for idx in range(start_index - 1, total):
+            # Check if user requested cancellation
+            if CANCEL_FLAGS.get(chat_id, False):
+                CANCEL_FLAGS[chat_id] = False
+                await status_msg.edit("🛑 **Batch Download Cancelled by User!**")
+                return
+
             item = links[idx]
             if len(item) < 2:
                 continue
