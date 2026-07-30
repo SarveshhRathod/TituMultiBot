@@ -1,5 +1,6 @@
 pyrofork
-pyromod
+pyromod==1.5
+tgcrypto
 aiohttp
 aiofiles
 motor
