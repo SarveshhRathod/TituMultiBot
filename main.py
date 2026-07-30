@@ -1,7 +1,7 @@
 import asyncio
+import pyromod
 from aiohttp import web
 from pyrogram import Client
-from pyromod import listen
 from config import API_ID, API_HASH, BOT_TOKEN, PORT
 from plugins.handlers import register_handlers
 
