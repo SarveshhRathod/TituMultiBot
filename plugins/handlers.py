@@ -77,15 +77,11 @@ def register_handlers(app: Client):
         txt_path = await response.download()
         
         with open(txt_path, "r", encoding="utf-8") as f:
-            content = f.read().splitlines()
+            content_lines = f.read().splitlines()
         if os.path.exists(txt_path):
             os.remove(txt_path)
 
-        links = [line.split("://", 1) for line in content if "://" in line]
-        if not links:
-            return await message.reply_text("❌ No valid URLs found in file.")
-
-        await message.reply_text(f"🔗 **Found {len(links)} links!**\nSend Quality (e.g., `360`, `480`, `720`):")
+        await message.reply_text(f"🔗 **Processing File...**\nSend Quality (e.g., `360`, `480`, `720`):")
         res_msg: Message = await client.listen(message.chat.id)
         
         if res_msg.text and res_msg.text.startswith("/"):
@@ -104,7 +100,7 @@ def register_handlers(app: Client):
         await BatchDownloader.process_batch(
             client=client,
             message=message,
-            links=links,
+            content_lines=content_lines,
             quality=quality,
             batch_name=batch_name,
             credit=message.from_user.mention
