@@ -10,7 +10,6 @@ def clean_str(val: str) -> str:
     return str(val).replace('\r', '').replace('\n', '').strip()
 
 def extract_userid_from_token(token: str) -> str:
-    """Extract User ID from Appx/Classx JWT Token payload."""
     try:
         parts = clean_str(token).split('.')
         if len(parts) >= 2:
@@ -38,7 +37,6 @@ def extract_userid_from_token(token: str) -> str:
     return ""
 
 async def get_appx_profile_userid(session, api_base: str, headers: dict) -> str:
-    """Fallback: Fetch User ID directly from Appx Profile API."""
     profile_urls = [
         f"{api_base}/get/get_user_profile",
         f"{api_base}/get/user_profile",
@@ -98,15 +96,20 @@ class EdTechExtractor:
         }
         
         async with aiohttp.ClientSession() as session:
-            # If User-ID still empty, fetch from profile API
             if not user_id:
                 user_id = await get_appx_profile_userid(session, api_base, headers)
                 headers["User-ID"] = user_id
 
-            # Endpoint 1: get_all_purchases
-            for uid_param in ([user_id, ""] if user_id else [""]):
+            endpoints = [
+                f"{api_base}/get/get_all_purchases?userid={user_id}&item_type=10",
+                f"{api_base}/get/mycourseweb?userid={user_id}",
+                f"{api_base}/get/mycourse?userid={user_id}",
+                f"{api_base}/get/get_all_purchases?item_type=10",
+                f"{api_base}/get/mycourseweb"
+            ]
+
+            for url in endpoints:
                 try:
-                    url = f"{api_base}/get/get_all_purchases?userid={uid_param}&item_type=10"
                     async with session.get(url, headers=headers) as resp:
                         if resp.status == 200:
                             res = await resp.json()
@@ -114,29 +117,6 @@ class EdTechExtractor:
                                 return res
                 except Exception:
                     pass
-
-            # Endpoint 2: mycourseweb
-            for uid_param in ([user_id, ""] if user_id else [""]):
-                try:
-                    url = f"{api_base}/get/mycourseweb?userid={uid_param}"
-                    async with session.get(url, headers=headers) as resp:
-                        if resp.status == 200:
-                            res = await resp.json()
-                            if res.get("data"):
-                                return res
-                except Exception:
-                    pass
-
-            # Endpoint 3: mycourse
-            try:
-                url = f"{api_base}/get/mycourse?userid={user_id}"
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 200:
-                        res = await resp.json()
-                        if res.get("data"):
-                            return res
-            except Exception:
-                pass
 
             return {}
 
@@ -158,12 +138,10 @@ class EdTechExtractor:
         lines = []
 
         async with aiohttp.ClientSession() as session:
-            
             if not user_id:
                 user_id = await get_appx_profile_userid(session, api_base, headers)
                 headers["User-ID"] = user_id
 
-            # Helper to parse video detail & decrypt link
             async def parse_video_item(item_id, item_title="Untitled", is_folder_wise=0):
                 try:
                     url = f"{api_base}/get/fetchVideoDetailsById?course_id={course_id}&video_id={item_id}&ytflag=0&folder_wise_course={is_folder_wise}"
@@ -217,7 +195,7 @@ class EdTechExtractor:
 
             await process_v2_folder("-1")
 
-            # --- STRATEGY 2: Appx V3 Live Classes (Concepts 1, 2, 0, blank) ---
+            # --- STRATEGY 2: Appx V3 Live Classes ---
             if not lines:
                 try:
                     async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
@@ -249,29 +227,6 @@ class EdTechExtractor:
                 except Exception:
                     pass
 
-            # --- STRATEGY 3: Appx V3 Direct Subject Classes ---
-            if not lines:
-                try:
-                    async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
-                        s_data = await s_resp.json()
-                        subjects = s_data.get("data", []) if isinstance(s_data.get("data"), list) else []
-
-                    for subj in subjects:
-                        subj_id = subj.get("subjectid")
-                        if not subj_id: continue
-
-                        async with session.get(f"{api_base}/get/livecourseclassbycourseandsubjectapiv3?courseid={course_id}&subjectid={subj_id}&start=-1", headers=headers) as cs_resp:
-                            cs_data = await cs_resp.json()
-                            classes = cs_data.get("data", []) if isinstance(cs_data.get("data"), list) else []
-                            for item in classes:
-                                v_id = item.get("id")
-                                v_title = item.get("Title") or item.get("title", "Untitled")
-                                if v_id:
-                                    await parse_video_item(v_id, v_title, is_folder_wise=0)
-                except Exception:
-                    pass
-
-        # Deduplicate lines
         unique_lines = []
         seen = set()
         for line in lines:
