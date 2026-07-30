@@ -1,4 +1,5 @@
 import os
+import re
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import OWNER_ID
@@ -6,11 +7,17 @@ from core.db import db
 from engine.extractor import EdTechExtractor
 from engine.downloader import BatchDownloader
 
-START_MENU = InlineKeyboardMarkup([
-    [InlineKeyboardButton("📦 Extract Courses", callback_data="mode_extract")],
-    [InlineKeyboardButton("📥 Download TXT File", callback_data="mode_download")],
-    [InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="mode_admin")]
-])
+# Dynamic Start Menu Builder
+async def get_start_menu(user_id: int) -> InlineKeyboardMarkup:
+    sudos = await db.get_sudo_users()
+    buttons = [
+        [InlineKeyboardButton("📦 Extract Courses", callback_data="mode_extract")],
+        [InlineKeyboardButton("📥 Download TXT File", callback_data="mode_download")]
+    ]
+    # Admin Panel button tabhi dikhega jab User ID Admin/Sudo list mein ho
+    if user_id in sudos:
+        buttons.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="mode_admin")])
+    return InlineKeyboardMarkup(buttons)
 
 EXTRACT_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("Appx (V2/V3)", callback_data="ext_appx")],
@@ -24,20 +31,26 @@ ADMIN_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔙 Back Home", callback_data="home")]
 ])
 
+def sanitize_filename(name: str) -> str:
+    """Remove special slashes and characters to prevent directory errors."""
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+
 def register_handlers(app: Client):
 
     @app.on_message(filters.command("start"))
     async def start_cmd(client: Client, message: Message):
+        user_id = message.from_user.id
         maint = await db.get_setting("maintenance", False)
         sudos = await db.get_sudo_users()
         
-        if maint and message.from_user.id not in sudos:
+        if maint and user_id not in sudos:
             return await message.reply_text("🚨 **Bot is currently under Maintenance Mode! Please try again later.**")
 
+        start_menu = await get_start_menu(user_id)
         await message.reply_text(
             f"👋 **Welcome {message.from_user.mention} to TituMultiBot!**\n\n"
             "An enterprise multi-purpose engine for course extraction & media batch downloader.",
-            reply_markup=START_MENU
+            reply_markup=start_menu
         )
 
     @app.on_message(filters.command("download") | filters.command("upload"))
@@ -48,6 +61,9 @@ def register_handlers(app: Client):
         ask_file = await message.reply_text("📂 **Send your `.txt` file containing URLs:**")
         response: Message = await client.listen(message.chat.id)
         
+        if response.text and response.text.startswith("/"):
+            return await message.reply_text("❌ **Operation Cancelled.**")
+
         if not response.document or not response.document.file_name.endswith(".txt"):
             return await response.reply_text("❌ **Invalid file! Please send a `.txt` document.**")
 
@@ -64,11 +80,19 @@ def register_handlers(app: Client):
 
         await message.reply_text(f"🔗 **Found {len(links)} links!**\nSend Quality (e.g., `360`, `480`, `720`):")
         res_msg: Message = await client.listen(message.chat.id)
+        
+        if res_msg.text and res_msg.text.startswith("/"):
+            return await message.reply_text("❌ **Operation Cancelled.**")
+            
         quality = res_msg.text if res_msg.text.isdigit() else "480"
 
         await message.reply_text("🏷️ **Enter Batch Name:**")
         b_msg: Message = await client.listen(message.chat.id)
-        batch_name = b_msg.text
+        
+        if b_msg.text and b_msg.text.startswith("/"):
+            return await message.reply_text("❌ **Operation Cancelled.**")
+            
+        batch_name = sanitize_filename(b_msg.text)
 
         await BatchDownloader.process_batch(
             client=client,
@@ -87,7 +111,8 @@ def register_handlers(app: Client):
         sudos = await db.get_sudo_users()
 
         if data == "home":
-            await query.message.edit_text("⚡ **Select an Option from Menu:**", reply_markup=START_MENU)
+            start_menu = await get_start_menu(user_id)
+            await query.message.edit_text("⚡ **Select an Option from Menu:**", reply_markup=start_menu)
 
         elif data == "mode_admin":
             if user_id not in sudos:
@@ -127,7 +152,7 @@ def register_handlers(app: Client):
             await query.message.delete()
             ask = await client.send_message(query.message.chat.id, "👥 **Send User ID to add as Sudo:**")
             res = await client.listen(query.message.chat.id)
-            if res.text.isdigit():
+            if res.text and res.text.isdigit():
                 await db.add_sudo(int(res.text))
                 await client.send_message(query.message.chat.id, f"✅ **User `{res.text}` added to Sudo Users!**")
             else:
@@ -159,10 +184,18 @@ def register_handlers(app: Client):
             await query.message.delete()
             ask_api = await client.send_message(query.message.chat.id, "🌐 **Send Appx API Domain (e.g., `tcsexamzoneapi.classx.co.in`):**")
             api_res = await client.listen(query.message.chat.id)
+            
+            if api_res.text and api_res.text.startswith("/"):
+                return await client.send_message(query.message.chat.id, "❌ **Operation Cancelled.**")
+                
             api_domain = api_res.text.strip()
 
             ask_auth = await client.send_message(query.message.chat.id, "🔑 **Send Credentials as `Email*Password` OR send `Token` directly:**")
             auth_res = await client.listen(query.message.chat.id)
+            
+            if auth_res.text and auth_res.text.startswith("/"):
+                return await client.send_message(query.message.chat.id, "❌ **Operation Cancelled.**")
+                
             auth_txt = auth_res.text.strip()
 
             try:
@@ -183,8 +216,13 @@ def register_handlers(app: Client):
                 await client.send_message(query.message.chat.id, "📌 **Send Course ID to extract:**")
                 cid_res = await client.listen(query.message.chat.id)
                 
-                out_file = f"Course_{cid_res.text}.txt"
-                await EdTechExtractor.extract_appx_course(api_domain, token, user_id, cid_res.text, out_file)
+                if cid_res.text and cid_res.text.startswith("/"):
+                    return await client.send_message(query.message.chat.id, "❌ **Operation Cancelled.**")
+                
+                clean_cid = sanitize_filename(cid_res.text)
+                out_file = f"Course_{clean_cid}.txt"
+                
+                await EdTechExtractor.extract_appx_course(api_domain, token, user_id, clean_cid, out_file)
                 await client.send_document(query.message.chat.id, out_file)
                 if os.path.exists(out_file):
                     os.remove(out_file)
