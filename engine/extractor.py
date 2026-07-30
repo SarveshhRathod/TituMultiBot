@@ -10,6 +10,7 @@ def clean_str(val: str) -> str:
     return str(val).replace('\r', '').replace('\n', '').strip()
 
 def extract_userid_from_token(token: str) -> str:
+    """Extract User ID from Appx/Classx JWT Token payload."""
     try:
         parts = clean_str(token).split('.')
         if len(parts) >= 2:
@@ -37,6 +38,7 @@ def extract_userid_from_token(token: str) -> str:
     return ""
 
 async def get_appx_profile_userid(session, api_base: str, headers: dict) -> str:
+    """Fallback: Fetch User ID directly from Appx Profile API."""
     profile_urls = [
         f"{api_base}/get/get_user_profile",
         f"{api_base}/get/user_profile",
@@ -96,6 +98,7 @@ class EdTechExtractor:
         }
         
         async with aiohttp.ClientSession() as session:
+            # If User-ID still empty, fetch from profile API
             if not user_id:
                 user_id = await get_appx_profile_userid(session, api_base, headers)
                 headers["User-ID"] = user_id
@@ -142,6 +145,7 @@ class EdTechExtractor:
                 user_id = await get_appx_profile_userid(session, api_base, headers)
                 headers["User-ID"] = user_id
 
+            # Helper to parse video detail & decrypt link
             async def parse_video_item(item_id, item_title="Untitled", is_folder_wise=0):
                 try:
                     url = f"{api_base}/get/fetchVideoDetailsById?course_id={course_id}&video_id={item_id}&ytflag=0&folder_wise_course={is_folder_wise}"
@@ -227,6 +231,7 @@ class EdTechExtractor:
                 except Exception:
                     pass
 
+        # Deduplicate lines
         unique_lines = []
         seen = set()
         for line in lines:
