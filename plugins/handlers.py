@@ -14,7 +14,7 @@ async def get_start_menu(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📦 Extract Courses", callback_data="mode_extract")],
         [InlineKeyboardButton("📥 Download TXT File", callback_data="mode_download")]
     ]
-    # Admin Panel button tabhi dikhega jab User ID Admin/Sudo list mein ho
+    # Admin Panel button is visible ONLY to Admins/Sudo Users
     if user_id in sudos:
         buttons.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="mode_admin")])
     return InlineKeyboardMarkup(buttons)
@@ -32,7 +32,8 @@ ADMIN_MENU = InlineKeyboardMarkup([
 ])
 
 def sanitize_filename(name: str) -> str:
-    """Remove special slashes and characters to prevent directory errors."""
+    """Remove slashes and special characters to prevent directory errors."""
+    if not name: return "file"
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 def register_handlers(app: Client):
@@ -65,7 +66,7 @@ def register_handlers(app: Client):
             return await message.reply_text("❌ **Operation Cancelled.**")
 
         if not response.document or not response.document.file_name.endswith(".txt"):
-            return await response.reply_text("❌ **Invalid file! Please send a `.txt` document.**")
+            return await message.reply_text("❌ **Invalid file! Please send a `.txt` document.**")
 
         txt_path = await response.download()
         
@@ -84,7 +85,7 @@ def register_handlers(app: Client):
         if res_msg.text and res_msg.text.startswith("/"):
             return await message.reply_text("❌ **Operation Cancelled.**")
             
-        quality = res_msg.text if res_msg.text.isdigit() else "480"
+        quality = res_msg.text.strip() if res_msg.text and res_msg.text.strip().isdigit() else "480"
 
         await message.reply_text("🏷️ **Enter Batch Name:**")
         b_msg: Message = await client.listen(message.chat.id)
@@ -208,9 +209,22 @@ def register_handlers(app: Client):
                 purchases = await EdTechExtractor.fetch_appx_courses(api_domain, token, user_id)
                 course_list_str = "**Your Available Courses:**\n\n"
                 
+                # Appx V2 & V3 Course Parser
+                has_courses = False
                 for item in purchases.get("data", []):
-                    for ct in item.get("coursedt", []):
-                        course_list_str += f"`{ct.get('id')}` - **{ct.get('course_name')}**\n"
+                    if "coursedt" in item:
+                        for ct in item.get("coursedt", []):
+                            course_list_str += f"`{ct.get('id')}` - **{ct.get('course_name')}**\n"
+                            has_courses = True
+                    else:
+                        ci = item.get("id")
+                        cn = item.get("course_name") or item.get("title")
+                        if ci and cn:
+                            course_list_str += f"`{ci}` - **{cn}**\n"
+                            has_courses = True
+
+                if not has_courses:
+                    return await client.send_message(query.message.chat.id, "❌ No active courses found for this account!")
 
                 await client.send_message(query.message.chat.id, course_list_str)
                 await client.send_message(query.message.chat.id, "📌 **Send Course ID to extract:**")
@@ -222,10 +236,16 @@ def register_handlers(app: Client):
                 clean_cid = sanitize_filename(cid_res.text)
                 out_file = f"Course_{clean_cid}.txt"
                 
+                status_msg = await client.send_message(query.message.chat.id, "⏳ **Extracting Course Content... Please wait.**")
+                
                 await EdTechExtractor.extract_appx_course(api_domain, token, user_id, clean_cid, out_file)
-                await client.send_document(query.message.chat.id, out_file)
-                if os.path.exists(out_file):
+                
+                if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+                    await client.send_document(query.message.chat.id, out_file)
+                    await status_msg.delete()
                     os.remove(out_file)
+                else:
+                    await status_msg.edit("❌ Failed to extract content or course is empty!")
 
             except Exception as e:
                 await client.send_message(query.message.chat.id, f"❌ **Error:** {str(e)}")
