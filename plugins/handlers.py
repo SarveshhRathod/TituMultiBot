@@ -5,9 +5,9 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from config import OWNER_ID
 from core.db import db
 from engine.extractor import EdTechExtractor
-from engine.downloader import BatchDownloader
+from engine.downloader import BatchDownloader, CANCEL_FLAGS
 
-# Dynamic Start Menu Builder (Admin button only visible to Admins)
+# Dynamic Start Menu Builder
 async def get_start_menu(user_id: int) -> InlineKeyboardMarkup:
     sudos = await db.get_sudo_users()
     buttons = [
@@ -31,7 +31,6 @@ ADMIN_MENU = InlineKeyboardMarkup([
 ])
 
 def sanitize_filename(name: str) -> str:
-    """Remove slashes and special characters to prevent directory errors."""
     if not name: return "file"
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
@@ -53,12 +52,19 @@ def register_handlers(app: Client):
             reply_markup=start_menu
         )
 
+    # --- CANCEL COMMAND HANDLER ---
+    @app.on_message(filters.command(["cancel", "stop"]))
+    async def cancel_handler(client: Client, message: Message):
+        chat_id = message.chat.id
+        CANCEL_FLAGS[chat_id] = True
+        await message.reply_text("🛑 **Cancellation requested! Stopping process...**")
+
     @app.on_message(filters.command("download") | filters.command("upload"))
     async def download_cmd(client: Client, message: Message):
         if not await db.is_premium(message.from_user.id):
             return await message.reply_text("❌ **You do not have access to use downloader!**")
 
-        ask_file = await message.reply_text("📂 **Send your `.txt` file containing URLs:**")
+        ask_file = await message.reply_text("📂 **Send your `.txt` file containing URLs:**\n(Send `/cancel` to stop)")
         response: Message = await client.listen(message.chat.id)
         
         if response.text and response.text.startswith("/"):
@@ -126,7 +132,7 @@ def register_handlers(app: Client):
             sudo_list = ", ".join([f"`{s}`" for s in sudos])
             
             info_text = (
-                f"🛠️ **CURRENT BOT DYNAMIC CONFIGURATION:**\n\n"
+                f"f🛠️ **CURRENT BOT DYNAMIC CONFIGURATION:**\n\n"
                 f"📢 **Log Channel ID:** `{log_ch}`\n"
                 f"🚨 **Maintenance Mode:** `{maint}`\n"
                 f"👑 **Owner ID:** `{OWNER_ID}`\n"
@@ -209,7 +215,6 @@ def register_handlers(app: Client):
                 purchases = await EdTechExtractor.fetch_appx_courses(api_domain, token, user_id)
                 course_list_str = "**Your Available Courses:**\n\n"
                 
-                # Appx V2 & V3 Course Parser
                 has_courses = False
                 for item in purchases.get("data", []):
                     if "coursedt" in item:
