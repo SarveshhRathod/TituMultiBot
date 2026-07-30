@@ -1,12 +1,41 @@
 import aiohttp
 import asyncio
 import json
+import base64
 from core.crypto import CryptoEngine
 
 def clean_str(val: str) -> str:
     if not val: 
         return ""
     return str(val).replace('\r', '').replace('\n', '').strip()
+
+def extract_userid_from_token(token: str) -> str:
+    """Extract User ID from Appx/Classx JWT Token payload."""
+    try:
+        parts = clean_str(token).split('.')
+        if len(parts) >= 2:
+            payload = parts[1]
+            payload += '=' * (-len(payload) % 4)
+            decoded = json.loads(base64.urlsafe_b64decode(payload).decode('utf-8'))
+            
+            uid = (
+                decoded.get("user_id") or 
+                decoded.get("id") or 
+                decoded.get("userid") or 
+                decoded.get("sub")
+            )
+            if not uid and isinstance(decoded.get("data"), dict):
+                uid = (
+                    decoded["data"].get("user_id") or 
+                    decoded["data"].get("id") or 
+                    decoded["data"].get("userid") or
+                    decoded["data"].get("_id")
+                )
+            if uid:
+                return str(uid)
+    except Exception:
+        pass
+    return ""
 
 class EdTechExtractor:
     
@@ -36,52 +65,73 @@ class EdTechExtractor:
     async def fetch_appx_courses(api_domain: str, token: str, user_id: str = "") -> dict:
         api_domain = clean_str(api_domain).replace("https://", "").replace("http://", "").strip("/")
         api_base = f"https://{api_domain}"
+        token = clean_str(token)
+        user_id = clean_str(user_id) or extract_userid_from_token(token)
+
         headers = {
             "Client-Service": "Appx",
             "source": "website",
             "Auth-Key": "appxapi",
-            "Authorization": clean_str(token),
-            "User-ID": clean_str(user_id)
+            "Authorization": token,
+            "User-ID": user_id
         }
         
         async with aiohttp.ClientSession() as session:
-            # Method 1: Purchases Endpoint
+            # Endpoint 1: get_all_purchases
             try:
-                async with session.get(f"{api_base}/get/get_all_purchases?userid={user_id}&item_type=10", headers=headers) as resp:
+                url = f"{api_base}/get/get_all_purchases?userid={user_id}&item_type=10"
+                async with session.get(url, headers=headers) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("data"):
-                            return data
+                        res = await resp.json()
+                        if res.get("data"):
+                            return res
             except Exception:
                 pass
 
-            # Method 2: Web Courses Fallback Endpoint
+            # Endpoint 2: mycourseweb
             try:
-                async with session.get(f"{api_base}/get/mycourseweb?userid={user_id}", headers=headers) as resp2:
-                    if resp2.status == 200:
-                        return await resp2.json()
+                url = f"{api_base}/get/mycourseweb?userid={user_id}"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        res = await resp.json()
+                        if res.get("data"):
+                            return res
             except Exception:
                 pass
-                    
+
+            # Endpoint 3: mycourse
+            try:
+                url = f"{api_base}/get/mycourse?userid={user_id}"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        res = await resp.json()
+                        if res.get("data"):
+                            return res
+            except Exception:
+                pass
+
             return {}
 
     @staticmethod
     async def extract_appx_course(api_domain: str, token: str, user_id: str, course_id: str, file_path: str):
         api_domain = clean_str(api_domain).replace("https://", "").replace("http://", "").strip("/")
         api_base = f"https://{api_domain}"
+        token = clean_str(token)
+        user_id = clean_str(user_id) or extract_userid_from_token(token)
+
         headers = {
             "Client-Service": "Appx",
             "source": "website",
             "Auth-Key": "appxapi",
-            "Authorization": clean_str(token),
-            "User-ID": clean_str(user_id)
+            "Authorization": token,
+            "User-ID": user_id
         }
         
         lines = []
 
         async with aiohttp.ClientSession() as session:
             
-            # --- ENGINE METHOD 1: Appx V2 Folder Structure ---
+            # --- METHOD 1: V2 Folder Structure ---
             async def process_v2_item(item):
                 mt = item.get("material_type")
                 title = item.get("Title") or item.get("title", "Untitled")
@@ -126,7 +176,7 @@ class EdTechExtractor:
             except Exception:
                 pass
 
-            # --- ENGINE METHOD 2: Appx V3 Live Course Structure (Fallback) ---
+            # --- METHOD 2: V3 Live Course Structure (Fallback) ---
             if not lines:
                 try:
                     async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
@@ -169,7 +219,7 @@ class EdTechExtractor:
                     pass
 
         if not lines:
-            raise Exception("No videos or PDFs found in this Course ID or access expired!")
+            raise Exception("No videos or PDFs found in this Course ID!")
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
