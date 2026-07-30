@@ -7,7 +7,7 @@ from core.db import db
 from engine.extractor import EdTechExtractor
 from engine.downloader import BatchDownloader, CANCEL_FLAGS
 
-# Dynamic Start Menu Builder
+# Dynamic Start Menu Builder (Admin Panel button is visible ONLY to Admins/Sudo Users)
 async def get_start_menu(user_id: int) -> InlineKeyboardMarkup:
     sudos = await db.get_sudo_users()
     buttons = [
@@ -31,6 +31,7 @@ ADMIN_MENU = InlineKeyboardMarkup([
 ])
 
 def sanitize_filename(name: str) -> str:
+    """Remove slashes and special characters to prevent directory errors."""
     if not name: return "file"
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
@@ -132,7 +133,7 @@ def register_handlers(app: Client):
             sudo_list = ", ".join([f"`{s}`" for s in sudos])
             
             info_text = (
-                f"f🛠️ **CURRENT BOT DYNAMIC CONFIGURATION:**\n\n"
+                f"🛠️ **CURRENT BOT DYNAMIC CONFIGURATION:**\n\n"
                 f"📢 **Log Channel ID:** `{log_ch}`\n"
                 f"🚨 **Maintenance Mode:** `{maint}`\n"
                 f"👑 **Owner ID:** `{OWNER_ID}`\n"
@@ -216,17 +217,26 @@ def register_handlers(app: Client):
                 course_list_str = "**Your Available Courses:**\n\n"
                 
                 has_courses = False
-                for item in purchases.get("data", []):
-                    if "coursedt" in item:
-                        for ct in item.get("coursedt", []):
-                            course_list_str += f"`{ct.get('id')}` - **{ct.get('course_name')}**\n"
-                            has_courses = True
-                    else:
-                        ci = item.get("id")
-                        cn = item.get("course_name") or item.get("title")
-                        if ci and cn:
-                            course_list_str += f"`{ci}` - **{cn}**\n"
-                            has_courses = True
+                data_items = purchases.get("data", [])
+                if isinstance(data_items, dict):
+                    data_items = data_items.get("courses") or data_items.get("data") or []
+
+                if isinstance(data_items, list):
+                    for item in data_items:
+                        if isinstance(item, dict):
+                            if "coursedt" in item and isinstance(item["coursedt"], list):
+                                for ct in item["coursedt"]:
+                                    ci = ct.get("id")
+                                    cn = ct.get("course_name") or ct.get("title")
+                                    if ci and cn:
+                                        course_list_str += f"`{ci}` - **{cn}**\n"
+                                        has_courses = True
+                            else:
+                                ci = item.get("id") or item.get("course_id")
+                                cn = item.get("course_name") or item.get("title") or item.get("name")
+                                if ci and cn:
+                                    course_list_str += f"`{ci}` - **{cn}**\n"
+                                    has_courses = True
 
                 if not has_courses:
                     return await client.send_message(query.message.chat.id, "❌ No active courses found for this account!")
