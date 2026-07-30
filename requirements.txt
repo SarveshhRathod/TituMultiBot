@@ -1,0 +1,11 @@
+pyrofork
+pyromod
+aiohttp
+aiofiles
+motor
+requests
+cloudscraper
+pycryptodome
+pytz
+yt-dlp
+ffmpeg-python
