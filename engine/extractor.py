@@ -131,95 +131,127 @@ class EdTechExtractor:
 
         async with aiohttp.ClientSession() as session:
             
-            # --- METHOD 1: V2 Folder Structure ---
-            async def process_v2_item(item):
-                mt = item.get("material_type")
-                title = item.get("Title") or item.get("title", "Untitled")
-                item_id = item.get("id")
-                
-                if mt == "FOLDER":
-                    try:
-                        async with session.get(f"{api_base}/get/folder_contentsv2?course_id={course_id}&parent_id={item_id}", headers=headers) as f_resp:
-                            sub_data = await f_resp.json()
-                            tasks = [process_v2_item(sub) for sub in sub_data.get("data", [])]
-                            await asyncio.gather(*tasks)
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        async with session.get(f"{api_base}/get/fetchVideoDetailsById?course_id={course_id}&folder_wise_course=1&ytflag=0&video_id={item_id}", headers=headers) as v_resp:
-                            v_data = await v_resp.json()
-                            vd = v_data.get("data", {})
-                            v_title = vd.get("Title", title)
-                            link = vd.get("download_link", "")
-                            
-                            if link:
-                                dec_link = CryptoEngine.decrypt_appx(link)
-                                lines.append(f"{v_title}: {dec_link}")
-                            else:
-                                for enc in vd.get("encrypted_links", []):
-                                    path = CryptoEngine.decrypt_appx(enc.get("path", ""))
-                                    if path:
-                                        lines.append(f"{v_title}: {path}")
-                                        break
-                            if vd.get("pdf_link"):
-                                lines.append(f"{v_title} (PDF): {CryptoEngine.decrypt_appx(vd['pdf_link'])}")
-                    except Exception:
-                        pass
-
-            try:
-                async with session.get(f"{api_base}/get/folder_contentsv2?course_id={course_id}&parent_id=-1", headers=headers) as resp:
-                    v2_res = await resp.json()
-                    if v2_res.get("data"):
-                        tasks = [process_v2_item(item) for item in v2_res.get("data", [])]
-                        await asyncio.gather(*tasks)
-            except Exception:
-                pass
-
-            # --- METHOD 2: V3 Live Course Structure (Fallback) ---
-            if not lines:
+            # Helper to parse video detail & decrypt link
+            async def parse_video_item(item_id, item_title="Untitled", is_folder_wise=0):
                 try:
-                    async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
-                        subj_data = await s_resp.json()
-                        subjects = subj_data.get("data", [])
-
-                    for subj in subjects:
-                        subj_id = subj.get("subjectid")
-                        async with session.get(f"{api_base}/get/alltopicfrmlivecourseclass?courseid={course_id}&subjectid={subj_id}&start=-1", headers=headers) as t_resp:
-                            topic_data = await t_resp.json()
-                            topics = topic_data.get("data", [])
-
-                        for topic in topics:
-                            topic_id = topic.get("topicid")
-                            async with session.get(f"{api_base}/get/livecourseclassbycoursesubtopconceptapiv3?courseid={course_id}&subjectid={subj_id}&topicid={topic_id}&conceptid=&start=-1", headers=headers) as c_resp:
-                                class_data = await c_resp.json()
-                                classes = class_data.get("data", [])
-
-                            for item in classes:
-                                v_id = item.get("id")
-                                v_title = item.get("Title", "Untitled")
-                                
-                                async with session.get(f"{api_base}/get/fetchVideoDetailsById?course_id={course_id}&video_id={v_id}&ytflag=0&folder_wise_course=0", headers=headers) as vd_resp:
-                                    v_info = await vd_resp.json()
-                                    vd = v_info.get("data", {})
-                                    title = vd.get("Title", v_title)
-                                    vl = vd.get("download_link", "")
-                                    
-                                    if vl:
-                                        lines.append(f"{title}: {CryptoEngine.decrypt_appx(vl)}")
-                                    else:
-                                        for enc in vd.get("encrypted_links", []):
-                                            p = CryptoEngine.decrypt_appx(enc.get("path", ""))
-                                            if p:
-                                                lines.append(f"{title}: {p}")
-                                                break
-                                    if vd.get("pdf_link"):
-                                        lines.append(f"{title} (PDF): {CryptoEngine.decrypt_appx(vd['pdf_link'])}")
+                    url = f"{api_base}/get/fetchVideoDetailsById?course_id={course_id}&video_id={item_id}&ytflag=0&folder_wise_course={is_folder_wise}"
+                    async with session.get(url, headers=headers) as resp:
+                        res = await resp.json()
+                        vd = res.get("data", {})
+                        if not isinstance(vd, dict): return
+                        
+                        v_title = vd.get("Title") or item_title
+                        link = vd.get("download_link") or vd.get("file_link") or ""
+                        
+                        if link:
+                            dec_link = CryptoEngine.decrypt_appx(link)
+                            if dec_link: lines.append(f"{v_title}: {dec_link}")
+                        
+                        # Encrypted links
+                        enc_links = vd.get("encrypted_links", []) or vd.get("download_links", [])
+                        if not link and enc_links:
+                            for enc in enc_links:
+                                path = enc.get("path") or enc.get("link")
+                                if path:
+                                    dec_path = CryptoEngine.decrypt_appx(path)
+                                    if dec_path:
+                                        lines.append(f"{v_title}: {dec_path}")
+                                        break
+                                        
+                        # PDFs
+                        for p_key in ["pdf_link", "pdf_link2", "material_link"]:
+                            p_val = vd.get(p_key)
+                            if p_val:
+                                dec_pdf = CryptoEngine.decrypt_appx(p_val)
+                                if dec_pdf: lines.append(f"{v_title} (PDF): {dec_pdf}")
                 except Exception:
                     pass
 
-        if not lines:
-            raise Exception("No videos or PDFs found in this Course ID!")
+            # --- STRATEGY 1: Appx V2 Folder Structure ---
+            async def process_v2_folder(parent_id="-1"):
+                try:
+                    async with session.get(f"{api_base}/get/folder_contentsv2?course_id={course_id}&parent_id={parent_id}", headers=headers) as f_resp:
+                        res = await f_resp.json()
+                        items = res.get("data", [])
+                        if isinstance(items, list):
+                            for item in items:
+                                mt = item.get("material_type")
+                                item_id = item.get("id")
+                                item_title = item.get("Title") or item.get("title", "Untitled")
+                                if mt == "FOLDER":
+                                    await process_v2_folder(item_id)
+                                else:
+                                    await parse_video_item(item_id, item_title, is_folder_wise=1)
+                except Exception:
+                    pass
+
+            await process_v2_folder("-1")
+
+            # --- STRATEGY 2: Appx V3 Live Classes (Subjects -> Topics -> Concepts 1 & 2) ---
+            if not lines:
+                try:
+                    async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
+                        s_data = await s_resp.json()
+                        subjects = s_data.get("data", []) if isinstance(s_data.get("data"), list) else []
+
+                    for subj in subjects:
+                        subj_id = subj.get("subjectid")
+                        if not subj_id: continue
+
+                        async with session.get(f"{api_base}/get/alltopicfrmlivecourseclass?courseid={course_id}&subjectid={subj_id}&start=-1", headers=headers) as t_resp:
+                            t_data = await t_resp.json()
+                            topics = t_data.get("data", []) if isinstance(t_data.get("data"), list) else []
+
+                        for topic in topics:
+                            topic_id = topic.get("topicid")
+                            if not topic_id: continue
+
+                            # Query for conceptid: "", "1" (Videos), "2" (PDFs), "0"
+                            for cid in ["1", "2", "", "0"]:
+                                async with session.get(f"{api_base}/get/livecourseclassbycoursesubtopconceptapiv3?courseid={course_id}&subjectid={subj_id}&topicid={topic_id}&conceptid={cid}&start=-1", headers=headers) as c_resp:
+                                    c_data = await c_resp.json()
+                                    classes = c_data.get("data", []) if isinstance(c_data.get("data"), list) else []
+                                    
+                                    for item in classes:
+                                        v_id = item.get("id")
+                                        v_title = item.get("Title") or item.get("title", "Untitled")
+                                        if v_id:
+                                            await parse_video_item(v_id, v_title, is_folder_wise=0)
+                except Exception:
+                    pass
+
+            # --- STRATEGY 3: Appx V3 Direct Subject Classes ---
+            if not lines:
+                try:
+                    async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
+                        s_data = await s_resp.json()
+                        subjects = s_data.get("data", []) if isinstance(s_data.get("data"), list) else []
+
+                    for subj in subjects:
+                        subj_id = subj.get("subjectid")
+                        if not subj_id: continue
+
+                        async with session.get(f"{api_base}/get/livecourseclassbycourseandsubjectapiv3?courseid={course_id}&subjectid={subj_id}&start=-1", headers=headers) as cs_resp:
+                            cs_data = await cs_resp.json()
+                            classes = cs_data.get("data", []) if isinstance(cs_data.get("data"), list) else []
+                            for item in classes:
+                                v_id = item.get("id")
+                                v_title = item.get("Title") or item.get("title", "Untitled")
+                                if v_id:
+                                    await parse_video_item(v_id, v_title, is_folder_wise=0)
+                except Exception:
+                    pass
+
+        # Deduplicate extracted lines
+        unique_lines = []
+        seen = set()
+        for line in lines:
+            if line not in seen:
+                seen.add(line)
+                unique_lines.append(line)
+
+        if not unique_lines:
+            raise Exception("No video or PDF links found in this Course ID!")
 
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+            f.write("\n".join(unique_lines))
