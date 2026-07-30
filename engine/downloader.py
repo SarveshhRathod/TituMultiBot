@@ -15,7 +15,7 @@ class BatchDownloader:
 
     @staticmethod
     def parse_txt_line(line: str):
-        """Cleanly parse Title and URL from TXT file lines."""
+        """Cleanly parse Title and URL from TXT file lines without duplicating https://."""
         line = line.strip()
         if not line:
             return None, None
@@ -57,7 +57,7 @@ class BatchDownloader:
             return await message.reply_text("❌ No valid video or PDF URLs found in the file!")
 
         status_msg = await message.reply_text(
-            f"🚀 **Starting Downloader Engine...**\n"
+            f"🚀 **Starting Enterprise Downloader Engine...**\n"
             f"📊 Total Items: `{total}`\n"
             f"🎬 Quality: `{quality}p`\n\n"
             f"💡 Send `/cancel` anytime to stop!"
@@ -82,7 +82,7 @@ class BatchDownloader:
             )
 
             try:
-                # --- PDF HANDLING ---
+                # --- PDF / DOCUMENT HANDLING ---
                 if ".pdf" in raw_url.lower():
                     pdf_path = f"{file_name}.pdf"
                     scraper = cloudscraper.create_scraper()
