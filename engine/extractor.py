@@ -37,6 +37,27 @@ def extract_userid_from_token(token: str) -> str:
         pass
     return ""
 
+async def get_appx_profile_userid(session, api_base: str, headers: dict) -> str:
+    """Fallback: Fetch User ID directly from Appx Profile API."""
+    profile_urls = [
+        f"{api_base}/get/get_user_profile",
+        f"{api_base}/get/user_profile",
+        f"{api_base}/get/myprofile"
+    ]
+    for url in profile_urls:
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    res = await resp.json()
+                    data = res.get("data", {})
+                    if isinstance(data, dict):
+                        uid = data.get("userid") or data.get("id") or data.get("user_id")
+                        if uid:
+                            return str(uid)
+        except Exception:
+            pass
+    return ""
+
 class EdTechExtractor:
     
     @staticmethod
@@ -77,27 +98,34 @@ class EdTechExtractor:
         }
         
         async with aiohttp.ClientSession() as session:
+            # If User-ID still empty, fetch from profile API
+            if not user_id:
+                user_id = await get_appx_profile_userid(session, api_base, headers)
+                headers["User-ID"] = user_id
+
             # Endpoint 1: get_all_purchases
-            try:
-                url = f"{api_base}/get/get_all_purchases?userid={user_id}&item_type=10"
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 200:
-                        res = await resp.json()
-                        if res.get("data"):
-                            return res
-            except Exception:
-                pass
+            for uid_param in ([user_id, ""] if user_id else [""]):
+                try:
+                    url = f"{api_base}/get/get_all_purchases?userid={uid_param}&item_type=10"
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            res = await resp.json()
+                            if res.get("data"):
+                                return res
+                except Exception:
+                    pass
 
             # Endpoint 2: mycourseweb
-            try:
-                url = f"{api_base}/get/mycourseweb?userid={user_id}"
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 200:
-                        res = await resp.json()
-                        if res.get("data"):
-                            return res
-            except Exception:
-                pass
+            for uid_param in ([user_id, ""] if user_id else [""]):
+                try:
+                    url = f"{api_base}/get/mycourseweb?userid={uid_param}"
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            res = await resp.json()
+                            if res.get("data"):
+                                return res
+                except Exception:
+                    pass
 
             # Endpoint 3: mycourse
             try:
@@ -131,6 +159,10 @@ class EdTechExtractor:
 
         async with aiohttp.ClientSession() as session:
             
+            if not user_id:
+                user_id = await get_appx_profile_userid(session, api_base, headers)
+                headers["User-ID"] = user_id
+
             # Helper to parse video detail & decrypt link
             async def parse_video_item(item_id, item_title="Untitled", is_folder_wise=0):
                 try:
@@ -147,7 +179,6 @@ class EdTechExtractor:
                             dec_link = CryptoEngine.decrypt_appx(link)
                             if dec_link: lines.append(f"{v_title}: {dec_link}")
                         
-                        # Encrypted links
                         enc_links = vd.get("encrypted_links", []) or vd.get("download_links", [])
                         if not link and enc_links:
                             for enc in enc_links:
@@ -158,7 +189,6 @@ class EdTechExtractor:
                                         lines.append(f"{v_title}: {dec_path}")
                                         break
                                         
-                        # PDFs
                         for p_key in ["pdf_link", "pdf_link2", "material_link"]:
                             p_val = vd.get(p_key)
                             if p_val:
@@ -187,7 +217,7 @@ class EdTechExtractor:
 
             await process_v2_folder("-1")
 
-            # --- STRATEGY 2: Appx V3 Live Classes (Subjects -> Topics -> Concepts 1 & 2) ---
+            # --- STRATEGY 2: Appx V3 Live Classes (Concepts 1, 2, 0, blank) ---
             if not lines:
                 try:
                     async with session.get(f"{api_base}/get/allsubjectfrmlivecourseclass?courseid={course_id}&start=-1", headers=headers) as s_resp:
@@ -206,7 +236,6 @@ class EdTechExtractor:
                             topic_id = topic.get("topicid")
                             if not topic_id: continue
 
-                            # Query for conceptid: "", "1" (Videos), "2" (PDFs), "0"
                             for cid in ["1", "2", "", "0"]:
                                 async with session.get(f"{api_base}/get/livecourseclassbycoursesubtopconceptapiv3?courseid={course_id}&subjectid={subj_id}&topicid={topic_id}&conceptid={cid}&start=-1", headers=headers) as c_resp:
                                     c_data = await c_resp.json()
@@ -242,7 +271,7 @@ class EdTechExtractor:
                 except Exception:
                     pass
 
-        # Deduplicate extracted lines
+        # Deduplicate lines
         unique_lines = []
         seen = set()
         for line in lines:
